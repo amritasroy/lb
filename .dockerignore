@@ -1,0 +1,58 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.pytest_cache
+.coverage
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Data files (large datasets should not be in image)
+*.csv
+*.parquet
+*.h5
+*.hdf5
+
+# Model artifacts (loaded at runtime, not in image)
+artifacts/
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.h5
+
+# Documentation
+*.md
+docs/
+
+# Testing
+tests/
+test_*.py
+*_test.py
+
+# Misc
+.DS_Store
+*.log
+tmp/
+temp/
