@@ -1,0 +1,179 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: churn-model-service
+  labels:
+    app: churn-model
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: churn-model
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: churn-model-deployment
+  labels:
+    app: churn-model
+spec:
+  # Design Decision: 2 replicas for high availability
+  # With 16GB node RAM and 5GB per instance, we can safely run 2-3 replicas per node
+  # This provides redundancy and handles concurrent requests
+  replicas: 2
+  
+  selector:
+    matchLabels:
+      app: churn-model
+  
+  template:
+    metadata:
+      labels:
+        app: churn-model
+    spec:
+      # Init container to download model artifacts
+      # Alternative: Use PersistentVolume with pre-loaded artifacts
+      initContainers:
+        - name: download-artifacts
+          image: google/cloud-sdk:alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Download model artifacts from GCS bucket
+              # Replace with actual GCS bucket path
+              # gsutil -m cp -r gs://mlzone-models/churn-model/v1/* /artifacts/
+              echo "Artifacts should be downloaded here from GCS/DVC"
+              echo "For demo purposes, ensure artifacts are pre-loaded or mounted"
+          volumeMounts:
+            - name: model-artifacts
+              mountPath: /artifacts
+      
+      containers:
+        - name: churn-model
+          image: gcr.io/your-project/churn-model:latest
+          
+          # Design Decision: Gunicorn with Uvicorn workers
+          # - Gunicorn: Process manager for production reliability
+          # - Uvicorn: ASGI server for async FastAPI performance
+          # - Workers: 2 workers per pod (5GB model * 2 = 10GB < 16GB node)
+          # - Threads: 4 threads per worker for I/O concurrency
+          # - Timeout: 120s for model loading and complex requests
+          command:
+            - gunicorn
+            - app:app
+            - --worker-class=uvicorn.workers.UvicornWorker
+            - --workers=2
+            - --threads=4
+            - --bind=0.0.0.0:8000
+            - --timeout=120
+            - --keep-alive=5
+            - --access-logfile=-
+            - --error-logfile=-
+            - --log-level=info
+          
+          ports:
+            - containerPort: 8000
+              name: http
+          
+          # Resource limits and requests
+          # Design Decision:
+          # - Memory: Request 6GB (5GB model + 1GB overhead), Limit 8GB (safety margin)
+          # - CPU: Request 1 core, Limit 2 cores (allows burst for preprocessing)
+          resources:
+            requests:
+              memory: "6Gi"
+              cpu: "1000m"
+            limits:
+              memory: "8Gi"
+              cpu: "2000m"
+          
+          # Liveness probe: Checks if container is alive
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60  # Allow time for model loading
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          # Readiness probe: Checks if container is ready to serve traffic
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          # Mount model artifacts
+          volumeMounts:
+            - name: model-artifacts
+              mountPath: /app/artifacts
+              readOnly: true
+          
+          # Environment variables
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: WORKERS
+              value: "2"
+      
+      # Volume for model artifacts
+      # Design Decision: Use emptyDir for demo
+      # In production, use PersistentVolume or GCS FUSE mount
+      volumes:
+        - name: model-artifacts
+          emptyDir:
+            sizeLimit: 8Gi
+          # Alternative for production:
+          # persistentVolumeClaim:
+          #   claimName: churn-model-artifacts-pvc
+
+---
+# Horizontal Pod Autoscaler (Optional)
+# Automatically scale based on CPU/Memory usage
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: churn-model-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: churn-model-deployment
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 min before scaling down
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60   # Scale up quickly
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
